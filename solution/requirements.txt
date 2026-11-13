@@ -1,0 +1,2 @@
+# The pipeline itself is standard-library only. pytest is needed to run tests.
+pytest>=8.0
