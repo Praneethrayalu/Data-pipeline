@@ -3,7 +3,7 @@
 ## Candidate
 - **Name:** Praneeth Rayalu Repalle
 - **Assignment chosen:** A (Data)
-- **Time spent (honest estimate):** ~2 hours of my direction, review and verification; the implementation itself was AI-assisted (see `AI_USAGE.md`)
+- **Time spent (honest estimate):** the implementation was AI-assisted and completed in under an hour of elapsed time; my own review of the code is not yet completed (see `AI_USAGE.md`)
 
 ## How to run
 ```bash

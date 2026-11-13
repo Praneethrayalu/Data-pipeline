@@ -10,9 +10,9 @@ Claude (a large language model, used through the Instinct assistant), plus `pyte
 The AI wrote the entire implementation in `solution/` - the normalisation rules,
 ingestion and ledger logic, report builders, database schema, tests, and the first
 draft of `SUBMISSION.md` - under my direction. My direction was: do this assignment,
-pick whichever of A/B it judged stronger, and build it to a professional bar. I am
-reviewing the code before submission; nothing here should be read as a claim that I
-wrote it myself.
+pick whichever of A/B it judged stronger, and build it to a professional bar. My own
+review of the code is not yet completed; nothing here should be read as a claim that
+I wrote it myself.
 
 ## What I wrote or decided myself
 - The decision to proceed with this assignment and to submit it.
@@ -31,7 +31,7 @@ wrote it myself.
 
 ## How I verified AI-generated code
 The following checks were executed against this exact tree (all re-runnable from a
-clean clone), and I am re-running them as part of my review:
+clean clone); I have not yet independently re-run them:
 - 34 automated tests: rule unit tests plus an end-to-end fixture covering rejections,
   duplicate merging, orphan relinking, phone-less overrides, unknown dispositions and
   malformed lines.
