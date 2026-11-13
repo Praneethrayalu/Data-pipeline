@@ -15,11 +15,11 @@ review of the code is not yet completed; nothing here should be read as a claim 
 I wrote it myself.
 
 ## What I wrote or decided myself
-- The decision to proceed with this assignment and to submit it.
-- Delegating the A-vs-B choice to the AI (it picked A: deterministic outputs it can
-  verify end-to-end) and approving that choice.
-- Review of the design decisions recorded in `SUBMISSION.md` is in progress; I will
-  update this file before the interview if any statement here stops being accurate.
+- I asked for one assignment to be completed for me, delegated the A-vs-B choice to
+  the AI (it picked A: deterministic outputs it can verify end-to-end), and set the
+  quality bar.
+- I have not yet completed my own review of the code. I will update this file before
+  the interview if any statement here stops being accurate.
 
 ## Where the AI was wrong or unhelpful
 - Its first draft routed the disposition catalogue through a database meta table for
