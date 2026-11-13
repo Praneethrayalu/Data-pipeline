@@ -220,3 +220,35 @@ def test_pii_not_stored_in_plaintext(fixture, tmp_path):
     run_pipeline(tmp_path / "pii.db", fixture / "drop_1")
     raw = (tmp_path / "pii.db").read_bytes()
     assert b"Aarav" not in raw and b"9876500001" not in raw and b"+919876500001" not in raw
+
+
+def test_crash_mid_drop_rolls_back(fixture, tmp_path, monkeypatch):
+    """A failure mid-drop must leave no partial state behind."""
+    import ledger.ingest as ingest_module
+
+    conn = db.connect(tmp_path / "crash.db")
+    schemas = load_schemas(SCHEMAS_DIR)
+    dispositions = load_dispositions(SCHEMAS_DIR)
+
+    original = ingest_module._ingest_event_file
+
+    def bomb(conn, event_file, dispositions):
+        original(conn, event_file, dispositions)  # do real work first
+        raise RuntimeError("simulated crash")
+
+    monkeypatch.setattr(ingest_module, "_ingest_event_file", bomb)
+    with pytest.raises(RuntimeError):
+        ingest.ingest_path(conn, schemas, dispositions, fixture / "drop_1")
+
+    # rolled back: no drop recorded, no counters moved, no leads, no orphans
+    assert conn.execute("SELECT COUNT(*) AS n FROM ingested_drops").fetchone()["n"] == 0
+    assert conn.execute("SELECT COUNT(*) AS n FROM leads").fetchone()["n"] == 0
+    assert conn.execute("SELECT COUNT(*) AS n FROM orphans").fetchone()["n"] == 0
+    assert db.counter(conn, "lead_rows_total") == 0
+    assert db.counter(conn, "events_total") == 0
+
+    # and the same drop ingests cleanly afterwards
+    monkeypatch.setattr(ingest_module, "_ingest_event_file", original)
+    conn2 = db.connect(tmp_path / "crash.db")
+    assert ingest.ingest_path(conn2, schemas, dispositions, fixture / "drop_1") == ["drop_1"]
+    assert db.counter(conn2, "lead_rows_total") > 0

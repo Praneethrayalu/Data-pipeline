@@ -61,40 +61,32 @@ def make_call(connected=False, telephony_failed=False, disposition=None):
 
 class TestBucket:
     CATALOGUE = {
-        "catalogue": {
-            "motor_renewal": {
-                "renewed": {"is_terminal": True, "is_success": True},
-                "dnd": {"is_terminal": True, "is_success": False},
-                "callback_requested": {"is_terminal": False, "is_success": False},
-            }
+        "motor_renewal": {
+            "renewed": {"is_terminal": True, "is_success": True},
+            "dnd": {"is_terminal": True, "is_success": False},
+            "callback_requested": {"is_terminal": False, "is_success": False},
         }
     }
 
-    def setup_method(self):
-        import ledger.report as report_module
-
-        report_module._DISPOSITIONS_CACHE.clear()
-        report_module._DISPOSITIONS_CACHE.update(self.CATALOGUE)
-
     def test_no_calls(self):
-        assert _bucket([]) == "yet_to_reach_out"
+        assert _bucket([], self.CATALOGUE) == "yet_to_reach_out"
 
     def test_completed_on_terminal_disposition(self):
         calls = [make_call(telephony_failed=True), make_call(connected=True, disposition="renewed")]
-        assert _bucket(calls) == "completed"
+        assert _bucket(calls, self.CATALOGUE) == "completed"
 
     def test_all_telephony_failed(self):
         calls = [make_call(telephony_failed=True), make_call(telephony_failed=True)]
-        assert _bucket(calls) == "in_progress_telephony_failed"
+        assert _bucket(calls, self.CATALOGUE) == "in_progress_telephony_failed"
 
     def test_mixed_is_dialed(self):
         calls = [make_call(telephony_failed=True), make_call(connected=True, disposition="callback_requested")]
-        assert _bucket(calls) == "in_progress_dialed"
+        assert _bucket(calls, self.CATALOGUE) == "in_progress_dialed"
 
     def test_call_without_disposition_is_still_dialed(self):
         calls = [make_call(connected=True)]
-        assert _bucket(calls) == "in_progress_dialed"
+        assert _bucket(calls, self.CATALOGUE) == "in_progress_dialed"
 
     def test_dnd_is_terminal(self):
         calls = [make_call(connected=True, disposition="dnd")]
-        assert _bucket(calls) == "completed"
+        assert _bucket(calls, self.CATALOGUE) == "completed"

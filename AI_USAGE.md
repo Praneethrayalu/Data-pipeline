@@ -32,7 +32,7 @@ I wrote it myself.
 ## How I verified AI-generated code
 The following checks were executed against this exact tree (all re-runnable from a
 clean clone); I have not yet independently re-run them:
-- 34 automated tests: rule unit tests plus an end-to-end fixture covering rejections,
+- 35 automated tests: rule unit tests plus an end-to-end fixture covering rejections,
   duplicate merging, orphan relinking, phone-less overrides, unknown dispositions and
   malformed lines.
 - The real generator on seed 42 (small and large) and an unseen seed 7.

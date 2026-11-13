@@ -38,20 +38,20 @@ The pipeline is a small package (`solution/ledger/`) with a strict split between
 Database schema (SQLite):
 
 - `leads(id, workflow_id, phone_hmac, phone_last4, name_hmac, batch_id,
-  external_ref, attrs)` — one row per `(workflow_id, canonical phone)`. PII is
+  external_ref, attrs)` - one row per `(workflow_id, canonical phone)`. PII is
   never stored in plaintext (see below). Non-PII optional fields live in an
   `attrs` JSON column so merged duplicates can overwrite field-by-field.
 - `ledger(id, event_id UNIQUE, event_type, workflow_id, call_id, occurred_at,
-  lead_id, payload)` — the append-only interaction ledger. Events are never
+  lead_id, payload)` - the append-only interaction ledger. Events are never
   updated or deleted; overrides are just new events.
-- `orphans(...)` — quarantined events with their parsed fields and raw line,
+- `orphans(...)` - quarantined events with their parsed fields and raw line,
   re-evaluated after every new drop.
 - `seen_events(event_id)`, `ingested_drops(drop_path)`, `rejections(...)`,
-  `meta(key, value)` counters — the machinery that makes re-ingestion a no-op
+  `meta(key, value)` counters - the machinery that makes re-ingestion a no-op
   and `data_quality.json` exact.
 
 **Idempotency:** drops are the unit of idempotency. An already-ingested drop is
-skipped entirely, so re-running `ingest` changes nothing — not even the
+skipped entirely, so re-running `ingest` changes nothing - not even the
 duplicate-event counters. Within a drop, `event_id` dedupe and
 `INSERT OR IGNORE` on rejections make every write convergent.
 
@@ -78,11 +78,12 @@ with zero setup.
 | Unparseable event timestamp counts as malformed | The ledger is useless without a time; spec's malformed definition is "not valid JSON / no event_id" and this is the closest bucket | Quarantining as orphan; rejected because it would pollute orphan counts |
 | Overrides beat sets regardless of timestamps; among same type, latest `occurred_at` wins | Spec: "latest override... if it has no override, the latest set" | Timestamp-only ordering; spec is explicit |
 | Tie-break same-timestamp disposition events by ledger insertion id | Generator can emit equal timestamps; deterministic output matters for diffs | Random/order-of-read; rejected as non-deterministic |
-| `success_leads` in `daily_overview` counts a lead on a date when a call *on that date* has a success effective disposition | Read of the contract: "at least one call **on that date** whose effective disposition has `is_success=true`"; effective disposition is evaluated over everything ingested so far, so a later override can make an earlier date's call successful | Only counting same-day dispositions; rejected — the ledger is the source of truth and overrides deliberately arrive later |
-| `lead_rows_total` counts non-blank data rows (accepted + rejected + merged duplicates) | Blank rows are "skipped and not counted"; every other row is a lead row | Counting only accepted leads; rejected — rejected rows are still lead rows |
-| Calls group by `call_id`; a call's lead/date come from its `call.initiated` event | Spec: "a call is counted only if its `call.initiated` event is present (and linked)" | Trusting per-event phones for grouping; rejected — overrides have no phone |
+| `success_leads` in `daily_overview` counts a lead on a date when a call *on that date* has a success effective disposition | Read of the contract: "at least one call **on that date** whose effective disposition has `is_success=true`"; effective disposition is evaluated over everything ingested so far, so a later override can make an earlier date's call successful | Only counting same-day dispositions; rejected - the ledger is the source of truth and overrides deliberately arrive later |
+| `lead_rows_total` counts non-blank data rows (accepted + rejected + merged duplicates) | Blank rows are "skipped and not counted"; every other row is a lead row | Counting only accepted leads; rejected - rejected rows are still lead rows |
+| Calls group by `call_id`; a call's lead/date come from its `call.initiated` event | Spec: "a call is counted only if its `call.initiated` event is present (and linked)" | Trusting per-event phones for grouping; rejected - overrides have no phone |
 | Decimal rounding half-up to 2 places | "Round to 2 places"; half-up matches financial convention | Banker's rounding; no signal in spec, noted here |
-| `docker-compose` Postgres not used | SQLite satisfies the contract, keeps a clean clone runnable with zero setup, and handles the large scale in 42s | Postgres; available if production-shaped concurrency mattered |
+| `batch_summary` holds one row per (workflow, batch) with at least one valid lead; a fully-rejected batch appears only in `rejections.csv` | Contract groups by batch of created leads; zero-lead batches have no leads to count | Emitting a zero row; no signal in spec, noted here |
+| `docker-compose` Postgres not used | SQLite satisfies the contract, keeps a clean clone runnable with zero setup, and handles the large scale in ~35s | Postgres; available if production-shaped concurrency mattered |
 
 ## Failure modes considered
 - **Re-runs / double ingestion:** drop skip + `event_id` dedupe + idempotent
@@ -97,16 +98,15 @@ with zero setup.
 - **Dirty lead rows:** blank-row skip, header alias mapping, renamed/re-ordered
   columns (batch_003 uses aliases), extra columns ignored, every documented
   phone/date/decimal/enum mess.
-- **Crash mid-drop:** a drop is only recorded in `ingested_drops` after it
-  completes; a crash means the drop is re-ingested and converges via
-  `event_id` dedupe and rejection `INSERT OR IGNORE`. Counters could
-  double-count if a crash lands mid-event-file after a commit — a production
-  system would make each drop one transaction; noted as a known limit.
+- **Crash mid-drop:** each drop is ingested as a single SQLite transaction.
+  A crash or error rolls the whole drop back - no partial leads, events or
+  counters - and the drop is simply re-ingested on the next run
+  (`test_crash_mid_drop_rolls_back`).
 - **Not handled:** concurrent ingest processes on one database; workflow IDs
   in event files with no schema (they orphan); leads whose phone changes.
 
 ## Testing
-34 tests (`python -m pytest solution/tests -q`, all passing):
+35 tests (`python -m pytest solution/tests -q`, all passing):
 - Unit tests for phone normalisation (all six generator formats + the invalid
   ones), all four date formats plus impossible dates, decimal prefixes/commas/
   negatives/rounding, enum case handling, header normalisation, all three
@@ -116,8 +116,9 @@ with zero setup.
 - An end-to-end fixture exercising rejections and reasons, blank rows, alias
   headers, duplicate merging across drops, orphans that link in a later drop,
   phone-less overrides, unknown dispositions, duplicate and malformed lines,
-  re-ingest idempotency, bulk-vs-sequential equivalence, and a byte scan of
-  the database proving no plaintext PII.
+  re-ingest idempotency, bulk-vs-sequential equivalence, a simulated crash
+  mid-drop (full rollback, then clean re-ingest), and a byte scan of the
+  database proving no plaintext PII.
 - Verified on the real generator: seed 42 small, seed 7 small (unseen seed),
   and seed 42 large. Re-ingesting both drops produces byte-identical reports;
   ingesting the parent directory matches sequential ingestion exactly.
@@ -127,13 +128,13 @@ with zero setup.
 ## Results
 - Seed 42, small: 2,057 lead rows (108 rejected, 57 merged duplicates), 8,745
   event lines (8 malformed, 237 duplicates, 18 unknown dispositions, 462
-  final orphans — mostly rejected leads and never-uploaded numbers that still
+  final orphans - mostly rejected leads and never-uploaded numbers that still
   got calls). Ingest + report: ~1 second.
 - Seed 42, large: 143,990 lead rows, 632,602 event lines; ingest + report in
-  **42 seconds** on a laptop-class sandbox (stretch: under 2 minutes).
+  **35 seconds** on a laptop-class sandbox (stretch: under 2 minutes).
 - Notable in the data: roughly a quarter of leads are never called; a visible
   share of "completed" leads end on `not_interested`, which is terminal but
-  not success — the two flags genuinely differ.
+  not success - the two flags genuinely differ.
 
 ## If I had another day
 1. Make each drop a single transaction (true crash atomicity for counters).

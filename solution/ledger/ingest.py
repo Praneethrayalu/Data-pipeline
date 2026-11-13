@@ -12,6 +12,7 @@ from __future__ import annotations
 import csv
 import json
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 
 from . import db
@@ -67,24 +68,31 @@ def _ingest_drop(
     ).fetchone():
         return False  # already ingested: re-running changes nothing
 
-    leads_dir = drop / "leads"
-    if leads_dir.is_dir():
-        for wf_dir in sorted(p for p in leads_dir.iterdir() if p.is_dir()):
-            schema = schemas.get(wf_dir.name)
-            if schema is None:
-                continue  # no schema for this workflow; nothing to validate against
-            for csv_file in sorted(wf_dir.glob("*.csv")):
-                _ingest_lead_file(conn, schema, csv_file)
+    # One transaction per drop: a crash or error mid-drop rolls everything
+    # back, so the next run re-ingests the drop from a clean state instead of
+    # converging on partial counters.
+    try:
+        leads_dir = drop / "leads"
+        if leads_dir.is_dir():
+            for wf_dir in sorted(p for p in leads_dir.iterdir() if p.is_dir()):
+                schema = schemas.get(wf_dir.name)
+                if schema is None:
+                    continue  # no schema for this workflow; nothing to validate against
+                for csv_file in sorted(wf_dir.glob("*.csv")):
+                    _ingest_lead_file(conn, schema, csv_file)
 
-    events_dir = drop / "events"
-    if events_dir.is_dir():
-        for event_file in sorted(events_dir.glob("*.jsonl")):
-            _ingest_event_file(conn, event_file, dispositions)
+        events_dir = drop / "events"
+        if events_dir.is_dir():
+            for event_file in sorted(events_dir.glob("*.jsonl")):
+                _ingest_event_file(conn, event_file, dispositions)
 
-    _relink_orphans(conn, dispositions)
+        _relink_orphans(conn, dispositions)
 
-    conn.execute("INSERT INTO ingested_drops (drop_path) VALUES (?)", (drop_key,))
-    conn.commit()
+        conn.execute("INSERT INTO ingested_drops (drop_path) VALUES (?)", (drop_key,))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     return True
 
 
@@ -114,7 +122,8 @@ def _parse_field(schema_field, raw_value):
 
 def _ingest_lead_file(conn: sqlite3.Connection, schema: WorkflowSchema, csv_file: Path) -> None:
     batch_id = csv_file.stem
-    with open(csv_file, newline="", encoding="utf-8") as fh:
+    # utf-8-sig: tolerate a BOM without breaking first-header matching
+    with open(csv_file, newline="", encoding="utf-8-sig") as fh:
         rows = csv.reader(fh)
         try:
             header = next(rows)
@@ -165,7 +174,7 @@ def _ingest_lead_file(conn: sqlite3.Connection, schema: WorkflowSchema, csv_file
                     continue
                 parsed[schema_field.name] = value
 
-            if rejection is not None:
+            if rejection is not None:  # first failure in schema order is the reason
                 db.incr(conn, "lead_rows_rejected")
                 db.incr_rejection_reason(conn, rejection)
                 conn.execute(
@@ -178,7 +187,6 @@ def _ingest_lead_file(conn: sqlite3.Connection, schema: WorkflowSchema, csv_file
             if pending_warnings:
                 db.incr(conn, "field_warnings", pending_warnings)
             _upsert_lead(conn, schema, batch_id, parsed)
-    conn.commit()
 
 
 def _upsert_lead(conn: sqlite3.Connection, schema: WorkflowSchema, batch_id: str, parsed: dict) -> None:
@@ -257,7 +265,6 @@ def _ingest_event_file(conn: sqlite3.Connection, event_file: Path, dispositions:
                 continue  # empty lines are not counted at all
             db.incr(conn, "events_total")
             _process_event_line(conn, line, dispositions)
-    conn.commit()
 
 
 def _process_event_line(conn: sqlite3.Connection, line: str, dispositions: dict) -> None:
@@ -380,8 +387,6 @@ def _relink_orphans(conn: sqlite3.Connection, dispositions: dict) -> None:
             )
             if lead_id is None:
                 continue
-            from datetime import datetime
-
             event = json.loads(orphan["raw"])
             occurred_at = datetime.fromisoformat(orphan["occurred_at"])
             conn.execute("DELETE FROM orphans WHERE id = ?", (orphan["id"],))

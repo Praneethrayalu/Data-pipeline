@@ -50,8 +50,13 @@ def _effective_disposition(events: list[sqlite3.Row]) -> str | None:
     return json.loads(latest["payload"]).get("disposition_code")
 
 
-def build_calls(conn: sqlite3.Connection) -> tuple[list[Call], dict[int, LeadView]]:
-    """Reconstruct calls (initiated-present groups) and per-lead views."""
+def build_calls(
+    conn: sqlite3.Connection, catalogue: dict
+) -> tuple[list[Call], dict[int, LeadView]]:
+    """Reconstruct calls (initiated-present groups) and per-lead views.
+
+    catalogue: workflow_id -> {code -> {"is_terminal": bool, "is_success": bool}}
+    """
     leads = {
         row["id"]: LeadView(
             lead_id=row["id"],
@@ -88,28 +93,24 @@ def build_calls(conn: sqlite3.Connection) -> tuple[list[Call], dict[int, LeadVie
 
     for view in leads.values():
         view.calls.sort(key=lambda c: (c.initiated_at, c.call_id))
-        view.bucket = _bucket(view.calls)
+        view.bucket = _bucket(view.calls, catalogue)
     return calls, leads
 
 
-def _bucket(calls: list[Call]) -> str:
+def _bucket(calls: list[Call], catalogue: dict) -> str:
     if not calls:
         return "yet_to_reach_out"
-    if any(_disposition_flag(c, "is_terminal") for c in calls):
+    if any(_disposition_flag(c, "is_terminal", catalogue) for c in calls):
         return "completed"
     if all(c.telephony_failed for c in calls):
         return "in_progress_telephony_failed"
     return "in_progress_dialed"
 
 
-_DISPOSITIONS_CACHE: dict[str, dict[str, dict]] = {}
-
-
-def _disposition_flag(call: Call, flag: str) -> bool:
+def _disposition_flag(call: Call, flag: str, catalogue: dict) -> bool:
     code = call.effective_disposition
     if not code:
         return False
-    catalogue = _DISPOSITIONS_CACHE.get("catalogue", {})
     info = catalogue.get(call.workflow_id, {}).get(code)
     return bool(info and info[flag])
 
@@ -119,18 +120,18 @@ def write_reports(
 ) -> dict[str, Path]:
     """Write the five report files described by the output contract."""
     raw = load_dispositions(schemas_dir)
-    _DISPOSITIONS_CACHE["catalogue"] = {
+    catalogue = {
         wf: {code: {"is_terminal": d.is_terminal, "is_success": d.is_success}
              for code, d in codes.items()}
         for wf, codes in raw.items()
     }
-    calls, leads = build_calls(conn)
+    calls, leads = build_calls(conn, catalogue)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     written = {
         "batch_summary": _batch_summary(leads, out_dir),
-        "daily_overview": _daily_overview(calls, out_dir),
-        "lead_report": _lead_report(leads, out_dir),
+        "daily_overview": _daily_overview(calls, catalogue, out_dir),
+        "lead_report": _lead_report(leads, catalogue, out_dir),
         "rejections": _rejections(conn, out_dir),
         "data_quality": _data_quality(conn, out_dir),
     }
@@ -168,7 +169,7 @@ def _batch_summary(leads: dict[int, LeadView], out_dir: Path) -> Path:
     )
 
 
-def _daily_overview(calls: list[Call], out_dir: Path) -> Path:
+def _daily_overview(calls: list[Call], catalogue: dict, out_dir: Path) -> Path:
     days: dict[tuple[str, str], dict] = {}
     for call in calls:
         day = to_ist(call.initiated_at).date().isoformat()
@@ -179,7 +180,7 @@ def _daily_overview(calls: list[Call], out_dir: Path) -> Path:
         bucket["total"] += 1
         if call.connected:
             bucket["connected"] += 1
-        if _disposition_flag(call, "is_success"):
+        if _disposition_flag(call, "is_success", catalogue):
             bucket["success_leads"].add(call.lead_id)
     rows = []
     for (wf, day), b in sorted(days.items()):
@@ -194,7 +195,7 @@ def _daily_overview(calls: list[Call], out_dir: Path) -> Path:
     )
 
 
-def _lead_report(leads: dict[int, LeadView], out_dir: Path) -> Path:
+def _lead_report(leads: dict[int, LeadView], catalogue: dict, out_dir: Path) -> Path:
     rows = []
     for view in leads.values():
         calls = view.calls
@@ -214,7 +215,7 @@ def _lead_report(leads: dict[int, LeadView], out_dir: Path) -> Path:
             sum(1 for c in calls if c.connected),
             to_ist(last_call.initiated_at).isoformat() if last_call else "",
             current_disposition,
-            "true" if any(_disposition_flag(c, "is_success") for c in calls) else "false",
+            "true" if any(_disposition_flag(c, "is_success", catalogue) for c in calls) else "false",
         ])
     rows.sort(key=lambda r: (r[0], r[1]))
     return _write_csv(
